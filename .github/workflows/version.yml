@@ -1,4 +1,4 @@
-name: Version Bump
+name: Version Bump (Simple)
 
 on:
   push:
@@ -7,89 +7,53 @@ on:
       - main
 
 jobs:
-  version:
+  bump:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # タグ取得のためフル履歴を取得
+          fetch-depth: 0
 
-      - name: Set up Git user
+      - name: Bump version and push tag
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Get current version
-        id: get_version
-        run: |
-          if [ -f VERSION ]; then
-            current_version=$(cat VERSION)
-          else
-            current_version="0.0.0"
-          fi
-          echo "Current version: $current_version"
-          echo "version=$current_version" >> $GITHUB_OUTPUT
-
-      - name: Determine bump type
-        id: determine_bump
-        run: |
-          # ブランチ名を取得（refs/heads/branchName の後ろ部分）
-          branch="${GITHUB_REF##*/}"
-          echo "Current branch: $branch"
-          bump_type=""
+          # ブランチ名抽出
+          branch=${GITHUB_REF##*/}
           if [ "$branch" = "develop" ]; then
-            bump_type="patch"
+            bump="patch"
           elif [ "$branch" = "main" ]; then
-            # push時のコミット範囲内のメッセージを取得
-            # 初回プッシュなど before が全0の場合は最新コミットのみを確認
-            if [ -z "${{ github.event.before }}" ] || [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
-              messages=$(git log -1 --pretty=%B)
+            if echo "${{ github.event.head_commit.message }}" | grep -qi "\[major\]"; then
+              bump="major"
             else
-              messages=$(git log "${{ github.event.before }}..${{ github.sha }}" --pretty=%B)
-            fi
-            echo "Commit messages: $messages"
-            # コミットメッセージに「[major]」が含まれる場合は MAJOR を採用
-            if echo "$messages" | grep -iq "\[major\]"; then
-              bump_type="major"
-            else
-              bump_type="minor"
+              bump="minor"
             fi
           else
-            echo "このブランチではバージョンアップは行いません。"
-            bump_type="none"
-          fi
-          echo "Determined bump type: $bump_type"
-          echo "bump_type=$bump_type" >> $GITHUB_OUTPUT
-
-      - name: Bump version
-        id: bump_version
-        run: |
-          current_version=$(cat VERSION || echo "0.0.0")
-          IFS='.' read -r major minor patch <<< "$current_version"
-          echo "Current version parts: MAJOR=$major, MINOR=$minor, PATCH=$patch"
-          bump_type="${{ steps.determine_bump.outputs.bump_type }}"
-          if [ "$bump_type" = "major" ]; then
-            major=$((major + 1))
-            minor=0
-            patch=0
-          elif [ "$bump_type" = "minor" ]; then
-            minor=$((minor + 1))
-            patch=0
-          elif [ "$bump_type" = "patch" ]; then
-            patch=$((patch + 1))
-          else
-            echo "バージョンアップの必要がないため処理終了。"
             exit 0
           fi
-          new_version="${major}.${minor}.${patch}"
-          echo "New version: $new_version"
-          echo "$new_version" > VERSION
-          echo "version=$new_version" >> $GITHUB_OUTPUT
 
-      - name: Commit and tag version bump
-        run: |
-          git add VERSION
-          git commit -m "Bump version to $(cat VERSION)" || echo "VERSIONファイルに変更はありません。"
-          git tag "$(cat VERSION)"
+          # VERSION ファイルがなければ初期値 0.0.0
+          file="VERSION"
+          current=$( [ -f "$file" ] && cat "$file" || echo "0.0.0" )
+          IFS='.' read -r maj min pat <<< "$current"
+
+          case $bump in
+            major)
+              maj=$((maj + 1)); min=0; pat=0
+              ;;
+            minor)
+              min=$((min + 1)); pat=0
+              ;;
+            patch)
+              pat=$((pat + 1))
+              ;;
+          esac
+          new_ver="${maj}.${min}.${pat}"
+          echo "$new_ver" > "$file"
+          echo "New version: $new_ver"
+
+          # Git 設定、コミット、タグ作成＆ push
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$file"
+          git commit -m "Bump version to $new_ver" || exit 0
+          git tag "$new_ver"
           git push origin HEAD --follow-tags

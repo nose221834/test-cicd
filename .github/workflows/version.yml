@@ -1,4 +1,4 @@
-name: Version Bump (Simple)
+name: Version Bump & Release
 
 on:
   push:
@@ -7,16 +7,20 @@ on:
       - main
 
 jobs:
-  bump:
+  bump-and-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Bump version and push tag
+      - name: Bump version, tag and push
+        id: bump
         run: |
-          # ブランチ名抽出
+          # ブランチ名を抽出
           branch=${GITHUB_REF##*/}
           if [ "$branch" = "develop" ]; then
             bump="patch"
@@ -27,33 +31,47 @@ jobs:
               bump="minor"
             fi
           else
+            echo "No version bump for branch $branch"
             exit 0
           fi
 
-          # VERSION ファイルがなければ初期値 0.0.0
+          # VERSION ファイルの取得。なければ "0.0.0" を初期値に
           file="VERSION"
           current=$( [ -f "$file" ] && cat "$file" || echo "0.0.0" )
           IFS='.' read -r maj min pat <<< "$current"
 
+          # bump の種類に応じて更新
           case $bump in
             major)
-              maj=$((maj + 1)); min=0; pat=0
-              ;;
+              maj=$((maj+1)); min=0; pat=0 ;;
             minor)
-              min=$((min + 1)); pat=0
-              ;;
+              min=$((min+1)); pat=0 ;;
             patch)
-              pat=$((pat + 1))
-              ;;
+              pat=$((pat+1)) ;;
           esac
           new_ver="${maj}.${min}.${pat}"
           echo "$new_ver" > "$file"
           echo "New version: $new_ver"
 
-          # Git 設定、コミット、タグ作成＆ push
+          # GitHub Actions 用の Git 設定とコミット、タグ作成、push
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$file"
           git commit -m "Bump version to $new_ver" || exit 0
           git tag "$new_ver"
           git push origin HEAD --follow-tags
+
+          # 新しいバージョンを後続ステップへ出力
+          echo "new_version=$new_ver" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.bump.outputs.new_version }}
+          release_name: "Release ${{ steps.bump.outputs.new_version }}"
+          body: "Automatically generated release for version ${{ steps.bump.outputs.new_version }}"
+          draft: false
+          prerelease: false
